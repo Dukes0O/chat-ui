@@ -11,6 +11,8 @@ _Last updated: 2025-04-17_
 - **UI skeleton fully tested locally:** All major components (Sidebar, ChatView, Composer, ModelPicker, CostMeter) are functional with mock data and ready for API integration.
 - **Modularized UI components**: Created Sidebar, ChatView, Composer, ModelPicker, and CostMeter as vanilla JS modules in `components/` and refactored `main.js` to use them.
 - **UI architecture matches plan**: The front-end now reflects the architecture and component map from `lan_ai_chat_plan.md`.
+- **Added one-click startup script** (`start-all.bat`) to launch both backend (FastAPI) and frontend (Vite) servers in separate windows for easy development.
+- **Updated backend (`main.py`)** to support direct execution with `python main.py` by adding a `__main__` block that starts the FastAPI server with uvicorn. This enables the batch script to work seamlessly.
 
 ## What Hasn't Worked
 - **Vite CLI interactive prompts** cannot be used in the current environment (no terminal interaction possible).
