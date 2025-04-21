@@ -1,3 +1,37 @@
+// Utility: Fix markdown tables that are not properly formatted (AI bug workaround)
+function fixMarkdownTables(md) {
+  // If the string contains at least two pipe chars and at least one line without a newline, try to fix
+  if (!md.includes('|')) return md;
+  // Heuristic: If there are table pipes but no newlines between rows, try to split into rows
+  // Replace multiple spaces after pipes with a single pipe and newline
+  let fixed = md.replace(/\|\s*(?=\|)/g, '|');
+  // If there are table headers and no newlines, insert newlines after each table row
+  // Find table header lines (pipes with dashes)
+  fixed = fixed.replace(/(\|[\- ]+\|)/g, '$1\n');
+  // Insert newlines after each row if not present
+  fixed = fixed.replace(/(\|[^\n]+\|)/g, (m) => m.endsWith('\n') ? m : m + '\n');
+  return fixed;
+}
+
+// Utility: Convert [ \math ] and [\math] to $\math$ for KaTeX rendering
+function convertBracketsToMath(md) {
+  // Replace [ \something ] or [\something ] or [ \something] with $\something$
+  return md.replace(/\[\\([^\]]+)\]/g, (m, expr) => `$\\${expr.trim()}$`);
+}
+
+// Utility: Render math expressions in the DOM using KaTeX (after marked)
+function renderMathInElementIfAvailable(el) {
+  if (window.renderMathInElement) {
+    window.renderMathInElement(el, {
+      delimiters: [
+        {left: '$$', right: '$$', display: true},
+        {left: '$', right: '$', display: false}
+      ],
+      throwOnError: false
+    });
+  }
+}
+
 // Entry point for LAN AI Chat
 import './style.css';
 import { Sidebar } from './components/sidebar.js';
@@ -5,6 +39,16 @@ import { ChatView } from './components/chatview.js';
 import { Composer } from './components/composer.js';
 import { ModelPicker } from './components/modelpicker.js';
 import { CostMeter } from './components/costmeter.js';
+import { marked } from 'marked';
+
+// DEBUG: Test markdown table rendering
+// Uncomment to test table rendering in chat view
+// setTimeout(() => {
+//   const testDiv = document.createElement('div');
+//   testDiv.className = 'msg msg-assistant';
+//   testDiv.innerHTML = `<span class="msg-label">AI:</span> ` + marked.parse(`| Col1 | Col2 |\n|------|------|\n| A    | B    |\n| C    | D    |`);
+//   chatViewElement.appendChild(testDiv);
+// }, 1000);
 
 const app = document.getElementById('app');
 
@@ -43,7 +87,16 @@ async function updateChatView(sessionId, viewElement) {
     messages.forEach(msg => {
       const div = document.createElement('div');
       div.className = `msg msg-${msg.role}`;
-      div.textContent = `${msg.role === 'user' ? 'You' : 'AI'}: ${msg.content}`;
+      if (msg.role === 'assistant') {
+        let fixedContent = fixMarkdownTables(msg.content || '');
+        fixedContent = convertBracketsToMath(fixedContent);
+        div.innerHTML = `<span class="msg-label">AI:</span> ` + marked.parse(fixedContent);
+        renderMathInElementIfAvailable(div);
+      } else {
+        let userContent = convertBracketsToMath(msg.content || '');
+        div.innerHTML = `<span class="msg-label">You:</span> ` + marked.parseInline(userContent);
+        renderMathInElementIfAvailable(div);
+      }
       viewElement.appendChild(div);
     });
     // Scroll to bottom
@@ -73,35 +126,51 @@ async function handleSend(msg, files) {
   const emptyMsg = chatViewElement.querySelector('.empty');
   if (emptyMsg) chatViewElement.removeChild(emptyMsg);
 
-  // Append user message immediately
-  const userMsgDiv = document.createElement('div');
-  userMsgDiv.className = 'msg msg-user';
-  userMsgDiv.textContent = `You: ${msg}`;
-  chatViewElement.appendChild(userMsgDiv);
-  chatViewElement.scrollTop = chatViewElement.scrollHeight; // Scroll down
+  // --- PERSIST USER MESSAGE BEFORE SENDING TO AI ---
+  await fetch(`http://localhost:8000/sessions/${currentSession}/messages`, {
+    method: "POST",
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role: "user", content: msg })
+  });
 
-  // Clear composer and reset files
-  if (composerElement.querySelector('textarea')) {
-    composerElement.querySelector('textarea').value = '';
+  // Build message history for context (limit to last 30 messages)
+  let history = [];
+  try {
+    const res = await fetch(`http://localhost:8000/sessions/${currentSession}/messages`);
+    if (res.ok) {
+      history = await res.json();
+      // Only keep the last 30 messages for context
+      history = history.slice(-30);
+    } else {
+      // Fallback: just use the current message
+      history = [{ role: 'user', content: msg }];
+    }
+  } catch (e) {
+    console.warn('[WARN] Could not fetch message history for context:', e);
+    history = [{ role: 'user', content: msg }];
   }
-  attachedFiles = [];
-  // TODO: Update composer UI to reflect cleared files if needed
 
   const file_ids = files && files.length ? files.filter(f => f.file_id).map(f => f.file_id) : [];
   const body = {
     session_id: currentSession,
     prompt: msg,
     model: selectedModel,
-    file_ids
+    file_ids,
+    history // Pass context to backend
   };
   console.log('[DEBUG] Sending chat body:', body);
+
+  // Remove any existing placeholder/duplicate assistant message
+  const existingPlaceholders = chatViewElement.querySelectorAll('.msg-assistant[data-temp]');
+  existingPlaceholders.forEach(el => el.remove());
 
   // Append a placeholder for the assistant message
   const assistantMsgDiv = document.createElement('div');
   assistantMsgDiv.className = 'msg msg-assistant';
-  assistantMsgDiv.innerHTML = 'AI: Thinking...'; // Placeholder
+  assistantMsgDiv.setAttribute('data-temp', '1');
+  assistantMsgDiv.innerHTML = `<span class="msg-label">AI:</span> <span class="msg-content"></span>`;
   chatViewElement.appendChild(assistantMsgDiv);
-  chatViewElement.scrollTop = chatViewElement.scrollHeight; // Scroll down
+  chatViewElement.scrollTop = chatViewElement.scrollHeight;
 
   try {
     const res = await fetch('http://localhost:8000/chat', {
@@ -112,7 +181,7 @@ async function handleSend(msg, files) {
 
     if (!res.ok || !res.body) {
         const errText = await res.text();
-        assistantMsgDiv.innerHTML = `AI: [error ${res.status}] ${errText}`;
+        assistantMsgDiv.innerHTML = `<span class="msg-label">AI:</span> [error ${res.status}] ${errText}`;
         console.error('[ERROR] /chat response:', res.status, errText);
         return;
     }
@@ -123,8 +192,6 @@ async function handleSend(msg, files) {
     let done = false;
     let assistantContent = ""; // Accumulate content here
     let buffer = ""; // Buffer for partial JSON chunks
-
-    assistantMsgDiv.innerHTML = 'AI: '; // Clear placeholder
 
     while (!done) {
         const { value, done: streamDone } = await reader.read();
@@ -139,8 +206,12 @@ async function handleSend(msg, files) {
                 try {
                     const chunkData = JSON.parse(line);
                     if (chunkData.content) {
-                        assistantContent += chunkData.content;
-                        assistantMsgDiv.innerHTML = 'AI: ' + assistantContent;
+                        let fixedChunk = fixMarkdownTables(chunkData.content || '');
+                        fixedChunk = convertBracketsToMath(fixedChunk);
+                        assistantContent += fixedChunk;
+                        // Streamed content update
+                        assistantMsgDiv.querySelector('.msg-content').innerHTML = marked.parse(fixedChunk);
+                        renderMathInElementIfAvailable(assistantMsgDiv);
                         chatViewElement.scrollTop = chatViewElement.scrollHeight;
                     }
                 } catch (e) {
@@ -163,21 +234,28 @@ async function handleSend(msg, files) {
         }
     }
     // Final update to ensure the complete message persists
-    console.log("[DEBUG] Stream finished. Final accumulated content:", assistantContent);
-    assistantMsgDiv.innerHTML = 'AI: ' + assistantContent;
+    let fixedFinal = fixMarkdownTables(assistantContent);
+    fixedFinal = convertBracketsToMath(fixedFinal);
+    assistantMsgDiv.querySelector('.msg-content').innerHTML = marked.parse(fixedFinal);
+    renderMathInElementIfAvailable(assistantMsgDiv);
+    assistantMsgDiv.removeAttribute('data-temp'); // Mark as permanent
+    console.log("[DEBUG] Stream finished. Final accumulated content:", fixedFinal);
     console.log("[DEBUG] Final innerHTML set:", assistantMsgDiv.innerHTML);
 
     // Persist the assistant message to the backend
     await fetch(`http://localhost:8000/sessions/${currentSession}/messages`, {
       method: "POST",
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: "assistant", content: assistantContent })
+      body: JSON.stringify({ role: "assistant", content: fixedFinal })
     });
 
     chatViewElement.scrollTop = chatViewElement.scrollHeight;
 
+    // Remove the streaming placeholder and reload chat history for this session
+    assistantMsgDiv.remove();
+    await updateChatView(currentSession, chatViewElement);
   } catch (err) {
-    assistantMsgDiv.innerHTML = `AI: [error] ${err.message}`;
+    assistantMsgDiv.innerHTML = `<span class="msg-label">AI:</span> [error] ${err.message}`;
     console.error('Chat send error:', err);
     chatViewElement.scrollTop = chatViewElement.scrollHeight;
   }

@@ -13,6 +13,11 @@ _Last updated: 2025-04-17_
 - **UI architecture matches plan**: The front-end now reflects the architecture and component map from `lan_ai_chat_plan.md`.
 - **Added one-click startup script** (`start-all.bat`) to launch both backend (FastAPI) and frontend (Vite) servers in separate windows for easy development.
 - **Updated backend (`main.py`)** to support direct execution with `python main.py` by adding a `__main__` block that starts the FastAPI server with uvicorn. This enables the batch script to work seamlessly.
+- **Markdown rendering improved:** Chat UI now renders AI and user messages with correct bolding, bullets, and newline spacing. Output is much more readable and visually appealing.
+- **Persistent chat memory:** Chat context window increased to 30 messages. Both user and AI messages are now stored and displayed in order, supporting multi-turn conversations.
+- **Table and math formatting fixes:** Markdown tables are auto-corrected for common AI formatting errors; math expressions in the format `[ \sqrt{100} ]` are auto-converted for KaTeX rendering (though full math rendering troubleshooting remains open).
+- **KaTeX math rendering integration:** KaTeX is loaded in the frontend to support LaTeX-style math, but further troubleshooting is needed to ensure all math expressions render as expected.
+- **Streaming duplication resolved:** Only the final, formatted AI response is shown after each turn; placeholder and duplicate messages are removed.
 
 ## What Hasn't Worked
 - **Vite CLI interactive prompts** cannot be used in the current environment (no terminal interaction possible).
@@ -40,6 +45,7 @@ _Last updated: 2025-04-17_
 - Implement lightweight authentication (username + access key per user).
 - Ensure files and sessions are only accessible by their owner.
 - Update documentation and API surface to reflect new authentication and data isolation.
+- **[OPEN] KaTeX math rendering troubleshooting:** Math expressions are auto-converted and KaTeX is loaded, but further debugging is required to ensure all math displays correctly in both user and AI messages.
 
 ---
 
